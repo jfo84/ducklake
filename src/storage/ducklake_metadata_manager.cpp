@@ -4546,7 +4546,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 	if (data_file_tuples.empty()) {
 		throw InternalException("No files found!?");
 	}
-	// One statement per table for a commit of thousands of files is more than the parser can hold; split as inlined data is.
+	// One INSERT per table for thousands of files is more than the parser can hold; split as inlined data is.
 	auto insert_into = [](const char *table) {
 		return [table](const string &values) {
 			return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", table, values);
