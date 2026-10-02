@@ -4606,7 +4606,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 	if (data_file_tuples.empty()) {
 		throw InternalException("No files found!?");
 	}
-	// One statement per table cost the parser ~26 KB per tuple: a commit of ~11k files needed over 9 GiB.
+	// One statement per table for a commit of thousands of files is more than the parser can hold; split as inlined data is.
 	auto insert_into = [](const char *table) {
 		return [table](const string &values) {
 			return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", table, values);

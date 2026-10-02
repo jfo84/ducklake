@@ -1,0 +1,36 @@
+# name: test/sql/insert/insert_many_files_sqlite.test
+# description: A commit of 1000 files on a SQLite catalog splits its metadata INSERTs past 64 KB and keeps every row
+# group: [insert]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env CATALOG_PATH {TEST_DIR}/{UUID}.sqlite
+
+test-env DATA_PATH {TEST_DIR}/insert_many_files_sqlite_data
+
+statement ok
+ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS lake (DATA_PATH '{DATA_PATH}', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE lake.t(p INTEGER, v BIGINT, s VARCHAR)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.t SELECT i % 1000, i, 'value ' || i FROM range(10000) t(i)
+
+# One file per partition: a data-file tuple each, a column-stats tuple per column and a partition value each.
+query III
+SELECT (SELECT count(*) FROM meta.ducklake_data_file), (SELECT count(*) FROM meta.ducklake_file_column_stats), (SELECT count(*) FROM meta.ducklake_file_partition_value)
+----
+1000	3000	1000
+
+query III
+SELECT count(*), sum(v), count(DISTINCT p) FROM lake.t
+----
+10000	49995000	1000
