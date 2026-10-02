@@ -4474,17 +4474,16 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		return string();
 	}
 	D_ASSERT(new_files.size() == resolved_paths.size());
-	string data_file_insert_query;
-	string column_stats_insert_query;
-	string variant_stats_insert_query;
-	string partition_insert_query;
+	vector<string> data_file_tuples;
+	vector<string> column_stats_tuples;
+	vector<string> variant_stats_tuples;
+	vector<string> partition_tuples;
 
 	for (idx_t i = 0; i < new_files.size(); i++) {
 		auto &file = new_files[i];
 		auto &path = resolved_paths[i];
-		if (!data_file_insert_query.empty()) {
-			data_file_insert_query += ",";
-		}
+		data_file_tuples.emplace_back();
+		auto &data_file_insert_query = data_file_tuples.back();
 		auto row_id = DuckLakeUtil::OptionalIdxOrNull(file.row_id_start);
 		auto partition_id = DuckLakeUtil::OptionalIdxOrNull(file.partition_id);
 		auto begin_snapshot =
@@ -4505,9 +4504,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		data_file_insert_query += ")";
 		for (auto &raw_stats : file.column_stats) {
 			auto column_stats = DuckLakeColumnStatsInfo::FromColumnStats(raw_stats.first, raw_stats.second);
-			if (!column_stats_insert_query.empty()) {
-				column_stats_insert_query += ",";
-			}
+			column_stats_tuples.emplace_back();
+			auto &column_stats_insert_query = column_stats_tuples.back();
 			auto column_id = column_stats.column_id.index;
 			column_stats_insert_query += StringUtil::Format(
 			    "(%d, %d, %d, %s, %s, %s, %s, %s, %s, %s", data_file_index, table_id, column_id,
@@ -4519,9 +4517,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 			}
 			column_stats_insert_query += ")";
 			for (auto &variant_stats : column_stats.variant_stats) {
-				if (!variant_stats_insert_query.empty()) {
-					variant_stats_insert_query += ",";
-				}
+				variant_stats_tuples.emplace_back();
+				auto &variant_stats_insert_query = variant_stats_tuples.back();
 				auto &field_stats = variant_stats.field_stats;
 				variant_stats_insert_query += StringUtil::Format(
 				    "(%d, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s)", data_file_index, table_id, column_id,
@@ -4534,9 +4531,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 			throw InternalException("File should either not be partitioned, or have partition values");
 		}
 		for (auto &part_val : file.partition_values) {
-			if (!partition_insert_query.empty()) {
-				partition_insert_query += ",";
-			}
+			partition_tuples.emplace_back();
+			auto &partition_insert_query = partition_tuples.back();
 			string partition_val;
 			if (part_val.partition_value.IsNull()) {
 				partition_val = "NULL";
@@ -4547,27 +4543,19 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 			                                             part_val.partition_column_idx, partition_val);
 		}
 	}
-	if (data_file_insert_query.empty()) {
+	if (data_file_tuples.empty()) {
 		throw InternalException("No files found!?");
 	}
-
-	// insert the data files
-	string batch_query;
-	batch_query +=
-	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_data_file VALUES %s;", data_file_insert_query);
-
-	// insert the column stats
-	batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats VALUES %s;",
-	                                  column_stats_insert_query);
-	if (!partition_insert_query.empty()) {
-		// insert the partition values
-		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES %s;",
-		                                  partition_insert_query);
-	}
-	if (!variant_stats_insert_query.empty()) {
-		batch_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_variant_stats VALUES %s;",
-		                                  variant_stats_insert_query);
-	}
+	// One statement per table cost the parser ~26 KB per tuple: a commit of ~11k files needed over 9 GiB.
+	auto insert_into = [](const char *table) {
+		return [table](const string &values) {
+			return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s VALUES %s;", table, values);
+		};
+	};
+	string batch_query = ChunkValuesStatements(data_file_tuples, insert_into("ducklake_data_file"));
+	batch_query += ChunkValuesStatements(column_stats_tuples, insert_into("ducklake_file_column_stats"));
+	batch_query += ChunkValuesStatements(partition_tuples, insert_into("ducklake_file_partition_value"));
+	batch_query += ChunkValuesStatements(variant_stats_tuples, insert_into("ducklake_file_variant_stats"));
 	return batch_query;
 }
 
