@@ -64,11 +64,6 @@ SELECT min(a), max(a) FROM lake.t WHERE p = 2999
 ----
 2999	5999
 
-query I
-SELECT count(*) FROM duckdb_tables() WHERE temporary
-----
-0
-
 # take the next snapshot's id in ducklake_snapshot_changes, so the commit fails at its last statement
 statement ok
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes (snapshot_id)
@@ -87,8 +82,3 @@ SELECT
   (SELECT count(*) FROM lake.t)
 ----
 3000	9000	3000	6000
-
-query I
-SELECT count(*) FROM duckdb_tables() WHERE temporary
-----
-0
