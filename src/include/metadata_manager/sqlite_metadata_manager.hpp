@@ -28,6 +28,9 @@ public:
 		// the default SQLITE_MAX_COLUMN
 		return 2000;
 	}
+	bool SupportsQueryAppender() const override {
+		return true;
+	}
 	bool IsRetryableCommitError(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
