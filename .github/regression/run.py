@@ -138,7 +138,7 @@ def main(argv=None):
     parser.add_argument("--benchmarks", required=True)
     parser.add_argument("--old", required=True)
     parser.add_argument("--new", required=True)
-    parser.add_argument("--catalog", choices=("duckdb", "postgres"), default="duckdb")
+    parser.add_argument("--catalog", choices=("duckdb", "postgres", "sqlite"), default="duckdb")
     parser.add_argument(
         "--postgres-database",
         default="ducklake_regression",

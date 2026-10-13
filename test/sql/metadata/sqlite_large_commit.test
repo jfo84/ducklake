@@ -27,7 +27,7 @@ FROM range(6000) r(i);
 
 # the file lists are inserted from the appended values, not parsed by DuckDB as a VALUES list
 query II
-SELECT count(*) FILTER (message ILIKE '%."main".ducklake_data_file SELECT * FROM appended_data'),
+SELECT count(*) FILTER (message ILIKE '%.main.ducklake_data_file FROM __duckdb_internal_appended_data'),
        count(*) FILTER (message ILIKE '%ducklake_data_file VALUES%')
 FROM duckdb_logs WHERE type = 'QueryLog'
 ----
@@ -73,9 +73,9 @@ query IIIIIIIIIIII rowsort
 FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(column_id), typeof(column_size_bytes), typeof(value_count), typeof(null_count), typeof(min_value), typeof(max_value), typeof(contains_nan), typeof(extra_stats), typeof(min_is_exact), typeof(max_is_exact) FROM ducklake_file_column_stats')
 ----
 integer	integer	integer	integer	integer	integer	null	null	null	null	null	null
-integer	integer	integer	integer	integer	integer	null	null	null	text	null	null
 integer	integer	integer	integer	integer	integer	text	text	integer	null	integer	integer
 integer	integer	integer	integer	integer	integer	text	text	null	null	integer	integer
+integer	integer	integer	integer	null	null	null	null	null	text	null	null
 
 # ducklake_file_partition_value
 query IIII rowsort
@@ -93,6 +93,9 @@ integer	integer	integer	text	text	integer	integer	integer	text	text	null	null
 statement ok
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes (snapshot_id)
 SELECT max(snapshot_id) + 1 FROM __ducklake_metadata_lake.ducklake_snapshot
+
+statement ok
+SET ducklake_max_retry_count = 0;
 
 statement error
 INSERT INTO lake.t SELECT i % 3000, i, 0, 'y', TIMESTAMP '2026-01-01', NULL FROM range(3000) r(i);
