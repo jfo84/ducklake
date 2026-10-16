@@ -4,6 +4,8 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 
+#include <algorithm>
+
 namespace duckdb {
 
 SQLiteMetadataManager::SQLiteMetadataManager(DuckLakeTransaction &transaction) : DuckLakeMetadataManager(transaction) {
@@ -47,7 +49,8 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	}
 }
 
-//! The type the stats table declares for a column, since sqlite_query returns every value as VARCHAR
+//! The type the stats table declares for a column, since sqlite_query returns every value as VARCHAR. Empty for a
+//! stat this list does not name, which keeps the base CTE rather than guessing its type.
 static string StatsColumnType(const string &stat) {
 	if (stat == "value_count" || stat == "null_count" || stat == "column_size_bytes") {
 		return "BIGINT";
@@ -58,14 +61,16 @@ static string StatsColumnType(const string &stat) {
 	if (stat == "min_value" || stat == "max_value" || stat == "extra_stats") {
 		return "VARCHAR";
 	}
-	throw InternalException("No declared type for file column stat \"%s\"", stat);
+	return string();
 }
 
 //! sqlite_scan pushes no filter into SQLite, so the base CTE copies every table's stats rows into DuckDB on each
 //! filtered read. sqlite_query runs the WHERE inside SQLite, in the same transaction.
 string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
                                                              const string &metadata_table_prefix) {
-	if (metadata_table_prefix != "{METADATA_CATALOG}") {
+	auto unmapped = std::any_of(req.referenced_stats.begin(), req.referenced_stats.end(),
+	                            [](const string &stat) { return StatsColumnType(stat).empty(); });
+	if (metadata_table_prefix != "{METADATA_CATALOG}" || unmapped) {
 		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix);
 	}
 	string native_list = "data_file_id";
