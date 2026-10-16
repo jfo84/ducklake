@@ -332,6 +332,9 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
+	if (options.access_mode != AccessMode::READ_ONLY) {
+		transaction.GetMetadataManager().CreateLookupIndexes();
+	}
 }
 
 DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalog_version,

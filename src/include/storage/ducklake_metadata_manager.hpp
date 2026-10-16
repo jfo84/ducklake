@@ -566,6 +566,10 @@ public:
 	virtual void MigrateV10(bool allow_failures = false);
 	//! Logs development migration failures during attach
 	virtual void MigrateV10Dev();
+	//! Create the indexes a catalog backend needs for its metadata lookups, when they are missing. Runs on every
+	//! read-write attach of an existing catalog, so it must cost nothing once they exist.
+	virtual void CreateLookupIndexes() {
+	}
 	//! Whether the catalog already has every metadata table and column of v1.1-dev1
 	bool HasV1_1Dev1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
