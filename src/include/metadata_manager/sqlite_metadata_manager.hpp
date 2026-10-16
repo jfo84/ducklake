@@ -28,6 +28,8 @@ public:
 	bool IsRetryableCommitError(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
+	                                      const string &metadata_table_prefix) override;
 };
 
 } // namespace duckdb

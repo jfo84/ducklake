@@ -47,4 +47,45 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	}
 }
 
+//! The type the stats table declares for a column, since sqlite_query returns every value as VARCHAR
+static string StatsColumnType(const string &stat) {
+	if (stat == "value_count" || stat == "null_count" || stat == "column_size_bytes") {
+		return "BIGINT";
+	}
+	if (stat == "contains_nan" || stat == "min_is_exact" || stat == "max_is_exact") {
+		return "BOOLEAN";
+	}
+	if (stat == "min_value" || stat == "max_value" || stat == "extra_stats") {
+		return "VARCHAR";
+	}
+	throw InternalException("No declared type for file column stat \"%s\"", stat);
+}
+
+//! sqlite_scan pushes no filter into SQLite, so the base CTE copies every table's stats rows into DuckDB on each
+//! filtered read. sqlite_query runs the WHERE inside SQLite, in the same transaction.
+string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
+                                                             const string &metadata_table_prefix) {
+	if (metadata_table_prefix != "{METADATA_CATALOG}") {
+		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix);
+	}
+	string native_list = "data_file_id";
+	string select_list = "data_file_id::BIGINT AS data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		if (stat == "value_count" || stat == "null_count") {
+			// every row of a file counts as a value or a NULL, so zero counts of both are unknown
+			native_list += StringUtil::Format(
+			    ", CASE WHEN value_count = 0 AND null_count = 0 THEN NULL ELSE %s END AS %s", stat, stat);
+		} else {
+			native_list += ", " + stat;
+		}
+		select_list += StringUtil::Format(", %s::%s AS %s", stat, StatsColumnType(stat), stat);
+	}
+	auto native_query =
+	    StringUtil::Format("SELECT %s FROM ducklake_file_column_stats WHERE column_id = %d AND table_id = %d",
+	                       native_list, req.column_field_index, table_id.index);
+	return StringUtil::Format("  SELECT %s\n"
+	                          "  FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
+	                          select_list, SQLString(native_query));
+}
+
 } // namespace duckdb

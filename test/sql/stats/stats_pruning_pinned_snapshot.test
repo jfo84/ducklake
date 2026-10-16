@@ -1,0 +1,61 @@
+# name: test/sql/stats/stats_pruning_pinned_snapshot.test
+# description: Non-regression guard: a read pinned on a WAL SQLite catalog prunes on its own snapshot while another connection commits
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# WAL lets a second connection commit while the first holds a read open; a rollback journal locks it out
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/stats_pruning_pinned_snapshot.db' AS ducklake (DATA_PATH '{TEST_DIR}/stats_pruning_pinned_snapshot', META_JOURNAL_MODE 'wal')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'a' || i, i FROM range(0, 100) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'b' || i, i FROM range(100, 200) r(i)
+
+statement ok con1
+BEGIN
+
+query III con1
+SELECT count(*), min(s), max(d) FROM ducklake.t WHERE i >= 150 AND s >= 'b' AND d < 190
+----
+40	b150	189.0
+
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.t WHERE i >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok con2
+INSERT INTO ducklake.t SELECT i, 'c' || i, i FROM range(200, 300) r(i)
+
+query III con1
+SELECT count(*), min(s), max(d) FROM ducklake.t WHERE i >= 150 AND s >= 'b' AND d < 290
+----
+50	b150	199.0
+
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.t WHERE i >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok con1
+COMMIT
+
+query III con1
+SELECT count(*), min(s), max(d) FROM ducklake.t WHERE i >= 150 AND s >= 'b' AND d < 290
+----
+140	b150	289.0
+
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.t WHERE i >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*

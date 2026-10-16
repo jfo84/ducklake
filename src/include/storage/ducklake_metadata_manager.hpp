@@ -588,8 +588,8 @@ protected:
 
 	virtual string GetLatestSnapshotQuery() const;
 
-	static string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
-	                                             const string &metadata_table_prefix);
+	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
+	                                              const string &metadata_table_prefix);
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
 	                                     const vector<idx_t> &runtime_filter_stats_columns,
@@ -678,8 +678,8 @@ protected:
 	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
 	                                   bool splice_into_parent = false);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
-	static string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
-	                                                 TableIndex table_id, const string &metadata_table_prefix);
+	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
+	                                          const string &metadata_table_prefix);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual bool ValueIsFinite(const Value &val);
