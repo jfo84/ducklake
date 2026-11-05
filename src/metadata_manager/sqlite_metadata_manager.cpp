@@ -124,6 +124,13 @@ string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequiremen
 	                          select_list, SQLString(native_query));
 }
 
+//! Runs the commit's per-table stats query inside SQLite, where its table_id filter reaches the index
+string SQLiteMetadataManager::ColumnsWithValuesQuery(const std::function<string(const string &prefix)> &build) {
+	auto native_query = "SELECT CAST(column_id AS TEXT) AS column_id FROM (" + build("main") + ")";
+	return StringUtil::Format("SELECT column_id::BIGINT AS column_id FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(native_query));
+}
+
 //! Covering, so the per-column stats lookups behind file pruning read only the index. IF NOT EXISTS takes no
 //! write lock once the index exists; building it holds the lock for as long as the stats table is large.
 static string LookupIndexStatement() {

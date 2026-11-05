@@ -4493,23 +4493,24 @@ string DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(const string &metadat
 	    metadata_table_name, id_name, GenerateIDList(ids));
 }
 
-string DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(TableIndex table_id,
-                                                                const set<FieldIndex> &column_ids) {
+string DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+                                                                const string &metadata_table_prefix) {
 	// a live file written before a column with a default other than NULL holds the default
 	auto ids = GenerateIDList(column_ids);
 	auto sql = StringUtil::Format(R"(
 SELECT s.column_id
-FROM {METADATA_CATALOG}.ducklake_file_column_stats s
-JOIN {METADATA_CATALOG}.ducklake_data_file f ON f.data_file_id = s.data_file_id AND f.end_snapshot IS NULL
+FROM %s.ducklake_file_column_stats s
+JOIN %s.ducklake_data_file f ON f.data_file_id = s.data_file_id AND f.end_snapshot IS NULL
 WHERE s.table_id = %d AND s.column_id IN (%s) AND (s.value_count IS NULL OR s.value_count > 0)
 UNION ALL
 SELECT c.column_id
-FROM {METADATA_CATALOG}.ducklake_column c
-JOIN {METADATA_CATALOG}.ducklake_data_file f
+FROM %s.ducklake_column c
+JOIN %s.ducklake_data_file f
     ON f.table_id = c.table_id AND f.end_snapshot IS NULL
     AND COALESCE(f.partial_max, f.begin_snapshot) < c.begin_snapshot
 WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)",
-	                              table_id.index, ids, table_id.index, ids);
+	                              metadata_table_prefix, metadata_table_prefix, table_id.index, ids,
+	                              metadata_table_prefix, metadata_table_prefix, table_id.index, ids);
 	if (column_ids.size() == 1) {
 		return sql + "\nLIMIT 1";
 	}
@@ -4517,7 +4518,8 @@ WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)
 }
 
 string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
-                                                            const map<FieldIndex, idx_t> &null_default_columns) {
+                                                            const map<FieldIndex, idx_t> &null_default_columns,
+                                                            const string &metadata_table_prefix) {
 	// a file without statistics of a column holds values of it unless it was written before a NULL default column
 	vector<string> column_values;
 	for (auto &column_id : column_ids) {
@@ -4525,17 +4527,20 @@ string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id,
 		auto values_from = added == null_default_columns.end() ? 0 : added->second;
 		column_values.push_back(StringUtil::Format("(%d, %d)", column_id.index, values_from));
 	}
+	// a CTE rather than an aliased VALUES list, which SQLite cannot parse
 	return StringUtil::Format(R"(
+WITH c(column_id, values_from) AS (VALUES %s)
 SELECT DISTINCT c.column_id
-FROM (VALUES %s) c(column_id, values_from)
-CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
+FROM c
+CROSS JOIN %s.ducklake_data_file f
+LEFT JOIN %s.ducklake_file_column_stats s
     ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
 WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
     WHEN s.data_file_id IS NULL THEN COALESCE(f.partial_max, f.begin_snapshot) >= c.values_from
     ELSE s.value_count IS NULL OR s.value_count > 0
 END)",
-	                          StringUtil::Join(column_values, ", "), table_id.index);
+	                          StringUtil::Join(column_values, ", "), metadata_table_prefix, metadata_table_prefix,
+	                          table_id.index);
 }
 
 string DuckLakeMetadataManager::GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {

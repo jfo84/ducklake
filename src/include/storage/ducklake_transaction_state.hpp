@@ -90,6 +90,11 @@ struct DuckLakeCommitContext {
 	    [](const vector<DuckLakeInlinedFileDeletionInfo> &) {
 		    return string();
 	    };
+	//! Builds the query of which columns hold values for the metadata catalog's own engine
+	std::function<string(const std::function<string(const string &)> &)> columns_with_values_query =
+	    [](const std::function<string(const string &)> &build) {
+		    return build("{METADATA_CATALOG}");
+	    };
 	//! Whether an earlier commit found values of a column at the snapshot
 	std::function<bool(TableIndex, FieldIndex, idx_t)> column_holds_values = [](TableIndex, FieldIndex, idx_t) {
 		return false;

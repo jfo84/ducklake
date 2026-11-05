@@ -1,0 +1,51 @@
+# name: test/sql/stats/sqlite_commit_stats_filtered_in_sqlite.test
+# description: A commit on a SQLite catalog reads only its own table's column stats rows when it checks committed values
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_commit_stats_filtered_in_sqlite.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_commit_stats_filtered_in_sqlite', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.f (c FLOAT, d DOUBLE);
+
+statement ok
+INSERT INTO ducklake.f VALUES (NULL, 1.0);
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_commit_stats_filtered_in_sqlite.db' AS meta (TYPE sqlite)
+
+# a stats row for a table that does not exist, holding text where value_count is declared integer
+statement ok
+SELECT * FROM sqlite_query('meta', 'INSERT INTO ducklake_file_column_stats (data_file_id, table_id, column_id, value_count) VALUES (999999, 999999, 1, ''x'')')
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_commit_stats_filtered_in_sqlite.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_commit_stats_filtered_in_sqlite')
+
+# the commit asks which columns hold committed values; scanning the whole stats table would hit that row
+statement ok
+INSERT INTO ducklake.f VALUES (0.2, 2.0);
+
+statement ok
+INSERT INTO ducklake.f VALUES (0.5, 3.0);
+
+query III
+SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) WHERE t.table_name = 'f' AND c.column_name = 'c'
+----
+true	0.2	0.5
+
+query I
+SELECT count(*) FROM ducklake.f WHERE c > 0.3
+----
+1

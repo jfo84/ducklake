@@ -41,6 +41,7 @@ public:
 	void CreateLookupIndexes() override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                      const string &metadata_table_prefix) override;
+	string ColumnsWithValuesQuery(const std::function<string(const string &prefix)> &build) override;
 };
 
 } // namespace duckdb

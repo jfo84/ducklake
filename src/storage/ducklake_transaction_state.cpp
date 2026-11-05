@@ -1452,8 +1452,10 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<FieldIndex> &columns,
                                                        const DuckLakeCommitContext &context) const {
 	// most columns with values are found without reading the statistics of each live file
-	RemoveReturnedColumns(DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(table_id, columns), columns,
-	                      context);
+	RemoveReturnedColumns(context.columns_with_values_query([&](const string &prefix) {
+		                      return DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(table_id, columns, prefix);
+	                      }),
+	                      columns, context);
 	if (columns.empty()) {
 		return;
 	}
@@ -1478,7 +1480,10 @@ void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<
 	for (auto &column_id : value_defaults) {
 		null_default_columns.erase(column_id);
 	}
-	RemoveReturnedColumns(DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, columns, null_default_columns),
+	RemoveReturnedColumns(context.columns_with_values_query([&](const string &prefix) {
+		                      return DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, columns,
+		                                                                                  null_default_columns, prefix);
+	                      }),
 	                      columns, context);
 	if (!columns.empty()) {
 		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_default_columns, top_level_columns,

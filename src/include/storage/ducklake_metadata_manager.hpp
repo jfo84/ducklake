@@ -482,10 +482,16 @@ public:
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
-	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+	                                              const string &metadata_table_prefix = "{METADATA_CATALOG}");
 	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
-	                                          const map<FieldIndex, idx_t> &null_default_columns);
+	                                          const map<FieldIndex, idx_t> &null_default_columns,
+	                                          const string &metadata_table_prefix = "{METADATA_CATALOG}");
+	//! The commit's query of which columns hold values, built for the metadata tables under the given prefix
+	virtual string ColumnsWithValuesQuery(const std::function<string(const string &prefix)> &build) {
+		return build("{METADATA_CATALOG}");
+	}
 	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
 	//! whether they are top level columns
 	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
