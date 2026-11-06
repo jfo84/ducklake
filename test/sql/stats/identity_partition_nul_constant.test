@@ -1,0 +1,43 @@
+# name: test/sql/stats/identity_partition_nul_constant.test
+# description: An equality on an identity partition column with a constant holding NUL reads without narrowing
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/identity_partition_nul_constant.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/identity_partition_nul_constant', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(s VARCHAR, i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (s)
+
+statement ok
+INSERT INTO ducklake.t SELECT 'a', i FROM range(0, 10) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT 'b', i FROM range(10, 20) r(i)
+
+# no stored value holds a NUL, and the constant cannot be written into the metadata SQL
+query I
+SELECT count(*) FROM ducklake.t WHERE s = chr(0)
+----
+0
+
+# one unwritable element keeps the whole list from narrowing, so the ordinary element's rows remain
+query II
+SELECT count(*), sum(i) FROM ducklake.t WHERE s IN ('a', chr(0))
+----
+10	45
+
+query II
+SELECT count(*), sum(i) FROM ducklake.t WHERE s IN ('b', 'a' || chr(0))
+----
+10	145

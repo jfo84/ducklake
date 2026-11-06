@@ -2099,7 +2099,12 @@ static optional_idx FoldBucketValue(ClientContext &context, const Value &constan
 		if (col_type.id() != LogicalTypeId::VARCHAR || constant.type().id() != LogicalTypeId::VARCHAR) {
 			return optional_idx();
 		}
-		out_partition_value = StringValue::Get(constant);
+		// a NUL cannot be written into the metadata SQL, as the zone-map filter also refuses
+		auto &text = StringValue::Get(constant);
+		if (text.find('\0') != string::npos) {
+			return optional_idx();
+		}
+		out_partition_value = text;
 		return optional_idx(1);
 	}
 	auto cast = constant.DefaultTryCastAs(col_type);
