@@ -2005,8 +2005,9 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 	return result;
 }
 
-string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
-                                                               const string &metadata_table_prefix) {
+string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(
+    const CTERequirement &req, TableIndex table_id, const string &metadata_table_prefix,
+    const std::function<string(const string &)> &candidate_files) {
 	string select_list = "data_file_id";
 	for (const auto &stat : req.referenced_stats) {
 		if (stat == "value_count" || stat == "null_count") {
@@ -2017,10 +2018,15 @@ string DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirem
 		}
 		select_list += ", " + stat;
 	}
+	// a file left out reads as having no stats, which the outer query's candidate filter then excludes
+	string candidates;
+	if (candidate_files) {
+		candidates = StringUtil::Format(" AND data_file_id IN (%s)", candidate_files(metadata_table_prefix));
+	}
 	return StringUtil::Format("  SELECT %s\n"
 	                          "  FROM %s.ducklake_file_column_stats\n"
-	                          "  WHERE column_id = %d AND table_id = %d\n",
-	                          select_list, metadata_table_prefix, req.column_field_index, table_id.index);
+	                          "  WHERE column_id = %d AND table_id = %d%s\n",
+	                          select_list, metadata_table_prefix, req.column_field_index, table_id.index, candidates);
 }
 
 string DuckLakeMetadataManager::GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements) {
@@ -2033,9 +2039,9 @@ string DuckLakeMetadataManager::GenerateStatsJoinList(const map<idx_t, CTERequir
 	return result;
 }
 
-string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
-                                                                   TableIndex table_id,
-                                                                   const string &metadata_table_prefix) {
+string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(
+    const map<idx_t, CTERequirement> &requirements, TableIndex table_id, const string &metadata_table_prefix,
+    const std::function<string(const string &)> &candidate_files) {
 	if (requirements.empty()) {
 		return "";
 	}
@@ -2045,7 +2051,7 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 		const auto &req = entry.second;
 		// each CTE is referenced by exactly one join, so there is nothing for a materialization hint to buy
 		ctes.push_back(StatsCteName(req.column_field_index) + " AS (\n" +
-		               GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix) + ")");
+		               GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix, candidate_files) + ")");
 	}
 	return "WITH " + StringUtil::Join(ctes, ",\n") + "\n";
 }
@@ -2087,6 +2093,14 @@ static optional_idx FoldBucketValue(ClientContext &context, const Value &constan
                                     idx_t bucket_count, string &out_partition_value) {
 	if (constant.IsNull()) {
 		return optional_idx();
+	}
+	if (bucket_count == 0) {
+		// an identity partition stores Value::ToString(), which for VARCHAR is the string itself
+		if (col_type.id() != LogicalTypeId::VARCHAR || constant.type().id() != LogicalTypeId::VARCHAR) {
+			return optional_idx();
+		}
+		out_partition_value = StringValue::Get(constant);
+		return optional_idx(1);
 	}
 	auto cast = constant.DefaultTryCastAs(col_type);
 	if (!cast || EqualsValuesInOtherBuckets(*cast, false)) {
@@ -2185,9 +2199,9 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 	}
 }
 
-string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableEntry &table,
-                                                                  const FilterPushdownInfo &filter_info,
-                                                                  const string &partition_value_table) {
+string DuckLakeMetadataManager::PartitionCandidateFilesSql(DuckLakeTableEntry &table,
+                                                           const FilterPushdownInfo &filter_info,
+                                                           const string &metadata_table_prefix) {
 	auto partition_data = table.GetPartitionData();
 	// a transaction-local spec has no committed files written with it, so there is nothing to prune
 	if (!partition_data || DuckLakeTransaction::IsTransactionLocal(partition_data->partition_id)) {
@@ -2201,10 +2215,11 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	}
 	auto &context = *context_ptr;
 	auto table_id = table.GetTableId();
-	string result;
+	vector<string> matching;
 
 	for (auto &field : partition_data->fields) {
-		if (field.transform.type != DuckLakeTransformType::BUCKET) {
+		if (field.transform.type != DuckLakeTransformType::BUCKET &&
+		    field.transform.type != DuckLakeTransformType::IDENTITY) {
 			continue;
 		}
 		auto it = filter_info.column_filters.find(field.field_id.index);
@@ -2220,7 +2235,8 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 
 		vector<string> bucket_values;
 		if (!CollectBucketEqualityValues(context, *col_filter.table_filter->expr, col_filter.column_type,
-		                                 field.transform.bucket_count, bucket_values)) {
+		                                 field.transform.type == DuckLakeTransformType::BUCKET ? field.transform.bucket_count : 0,
+		                                 bucket_values)) {
 			continue;
 		}
 		if (bucket_values.empty()) {
@@ -2230,21 +2246,19 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 		}
 
 		auto in_list = StringUtil::Join(bucket_values, bucket_values.size(), ", ", SQLString::ToString);
-		string clause =
-		    StringUtil::Format("data.data_file_id IN (SELECT data_file_id FROM %s "
-		                       "WHERE table_id = %d AND partition_key_index = %d AND partition_value IN (%s))",
-		                       partition_value_table, table_id.index, field.partition_key_index, in_list);
-
-		if (!result.empty()) {
-			result += " AND ";
-		}
-		result += clause;
+		matching.push_back(StringUtil::Format(
+		    "SELECT data_file_id FROM %s.ducklake_file_partition_value "
+		    "WHERE table_id = %d AND partition_key_index = %d AND partition_value IN (%s)",
+		    metadata_table_prefix, table_id.index, field.partition_key_index, in_list));
 	}
-	if (result.empty()) {
-		return result;
+	if (matching.empty()) {
+		return string();
 	}
 	// partition values are only comparable for files written with the current partition spec
-	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
+	return StringUtil::Format("SELECT data_file_id FROM %s.ducklake_data_file WHERE table_id = %d AND "
+	                          "(partition_id IS NULL OR partition_id <> %d) UNION ALL SELECT data_file_id FROM (%s)",
+	                          metadata_table_prefix, table_id.index, partition_data->partition_id,
+	                          StringUtil::Join(matching, " INTERSECT "));
 }
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
@@ -2256,17 +2270,22 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	D_ASSERT(file_list_type == FileListType::SCAN || dynamic_filters.empty());
 	D_ASSERT(file_list_type == FileListType::SCAN || runtime_filter_stats_columns.empty());
 	FilterSQLResult filter_result;
+	std::function<string(const string &)> candidate_files;
 	if (filter_info && !filter_info->Empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info);
-		if (table.GetPartitionData()) {
-			auto partition_value_table = metadata_table_prefix + ".ducklake_file_partition_value";
-			auto bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info, partition_value_table);
-			if (!bucket_clause.empty()) {
-				if (!filter_result.where_conditions.empty()) {
-					filter_result.where_conditions += " AND ";
-				}
-				filter_result.where_conditions += bucket_clause;
+		if (table.GetPartitionData() &&
+		    !PartitionCandidateFilesSql(table, *filter_info, metadata_table_prefix).empty()) {
+			candidate_files = [this, &table, filter_info](const string &prefix) {
+				return PartitionCandidateFilesSql(table, *filter_info, prefix);
+			};
+			auto native_prefix = metadata_table_prefix;
+			auto candidates = metadata_table_prefix == "{METADATA_CATALOG}"
+			                      ? MetadataIdQuery(candidate_files, "data_file_id")
+			                      : candidate_files(native_prefix);
+			if (!filter_result.where_conditions.empty()) {
+				filter_result.where_conditions += " AND ";
 			}
+			filter_result.where_conditions += "data.data_file_id IN (" + candidates + ")";
 		}
 	}
 	auto table_id = table.GetTableId();
@@ -2278,7 +2297,8 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		entry->second.referenced_stats.insert("max_value");
 		entry->second.referenced_stats.insert("contains_nan");
 	}
-	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, metadata_table_prefix);
+	string query =
+	    GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, metadata_table_prefix, candidate_files);
 	// one join per column serves both the filter conditions and the runtime stats below
 	string stats_join_list = GenerateStatsJoinList(filter_result.required_ctes);
 

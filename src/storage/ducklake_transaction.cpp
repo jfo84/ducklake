@@ -1518,7 +1518,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return result;
 	};
 	context.columns_with_values_query = [&](const std::function<string(const string &)> &build) {
-		return metadata_manager->ColumnsWithValuesQuery(build);
+		return metadata_manager->MetadataIdQuery(build, "column_id");
 	};
 	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
 		return metadata_manager->InlinedDeletionTableExists(

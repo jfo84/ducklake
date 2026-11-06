@@ -1,0 +1,55 @@
+# name: test/sql/stats/sqlite_stats_read_narrowed_by_partition.test
+# description: A filtered read on a SQLite catalog fetches stats only for files its identity partition equality can match
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_read_narrowed_by_partition.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_stats_read_narrowed_by_partition', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(s VARCHAR, i INTEGER)
+
+# written before the partitioning, so its file carries no partition values and must still be read
+statement ok
+INSERT INTO ducklake.t SELECT 'a', i FROM range(0, 10) r(i)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (s)
+
+statement ok
+INSERT INTO ducklake.t SELECT 'a', i FROM range(10, 20) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT 'b', i FROM range(20, 30) r(i)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_stats_read_narrowed_by_partition.db' AS meta (TYPE sqlite)
+
+# a stats row of the partition the read filters out, holding text where value_count is declared integer
+statement ok
+SELECT * FROM sqlite_query('meta', 'INSERT INTO ducklake_file_column_stats (data_file_id, table_id, column_id, value_count) SELECT pv.data_file_id, pv.table_id, c.column_id, ''x'' FROM ducklake_file_partition_value pv JOIN ducklake_column c ON c.table_id = pv.table_id AND c.column_name = ''i'' WHERE pv.partition_value = ''b''')
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_read_narrowed_by_partition.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_stats_read_narrowed_by_partition')
+
+# fetching the stats of every file would hit that row and fail its integer conversion
+query II
+SELECT count(*), sum(i) FROM ducklake.t WHERE s = 'a' AND i >= 5
+----
+15	180
+
+query II
+SELECT count(*), sum(i) FROM ducklake.t WHERE s IN ('a') AND i < 15
+----
+15	105

@@ -488,8 +488,8 @@ public:
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
 	                                          const map<FieldIndex, idx_t> &null_default_columns,
 	                                          const string &metadata_table_prefix = "{METADATA_CATALOG}");
-	//! The commit's query of which columns hold values, built for the metadata tables under the given prefix
-	virtual string ColumnsWithValuesQuery(const std::function<string(const string &prefix)> &build) {
+	//! A query of one id column over the metadata tables, built for the given prefix; an override may run it natively
+	virtual string MetadataIdQuery(const std::function<string(const string &prefix)> &build, const string &id_column) {
 		return build("{METADATA_CATALOG}");
 	}
 	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
@@ -616,8 +616,10 @@ protected:
 
 	virtual string GetLatestSnapshotQuery() const;
 
+	//! `candidate_files` builds, for a prefix, the files the partition values leave; empty keeps every file
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
-	                                              const string &metadata_table_prefix);
+	                                              const string &metadata_table_prefix,
+	                                              const std::function<string(const string &)> &candidate_files);
 	//! The snapshot placeholders of the query are replaced later, unless an override does it
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                     const FilterPushdownInfo *filter_info,
@@ -691,13 +693,12 @@ protected:
 	string GetFileSelectList(const string &prefix);
 	string GetDataFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
-	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
-	//! Returns "" when no foldable equality / IN-list predicate exists on a bucket-partitioned column.
-	//! The fragment uses only string equality against ducklake_file_partition_value, so it works against
+	//! Selects the files a filter's equalities on bucket() or VARCHAR identity partition columns can match, with
+	//! every file of another partition spec. Returns "" when no such equality / IN-list predicate exists.
+	//! The query uses only string equality against ducklake_file_partition_value, so it works against
 	//! any metadata backend (DuckDB / Postgres / SQLite). Bucket hashes are pre-computed in C++.
-	string BuildBucketPartitionPruningClause(
-	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
-	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
+	string PartitionCandidateFilesSql(DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
+	                                  const string &metadata_table_prefix);
 	//! Emit the condition for a single-column filter, registering the stats its CTE must project
 	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
 	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves.
@@ -706,7 +707,8 @@ protected:
 	                                   bool splice_into_parent = false);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
-	                                          const string &metadata_table_prefix);
+	                                          const string &metadata_table_prefix,
+	                                          const std::function<string(const string &)> &candidate_files);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual bool ValueIsFinite(const Value &val);

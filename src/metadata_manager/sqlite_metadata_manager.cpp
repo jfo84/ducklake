@@ -102,12 +102,14 @@ static string StatsColumnType(const string &stat) {
 }
 
 //! Reads the stats through sqlite_query, since sqlite_scan pushes no filter into SQLite
-string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
-                                                             const string &metadata_table_prefix) {
+string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(
+    const CTERequirement &req, TableIndex table_id, const string &metadata_table_prefix,
+    const std::function<string(const string &)> &candidate_files) {
 	auto unmapped = std::any_of(req.referenced_stats.begin(), req.referenced_stats.end(),
 	                            [](const string &stat) { return StatsColumnType(stat).empty(); });
 	if (metadata_table_prefix != "{METADATA_CATALOG}" || unmapped) {
-		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix);
+		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix,
+		                                                               candidate_files);
 	}
 	// TEXT values, so parallel scans on the shared connection read them without converting
 	string native_list = "CAST(data_file_id AS TEXT) AS data_file_id";
@@ -118,17 +120,18 @@ string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequiremen
 	}
 	auto native_query =
 	    StringUtil::Format("SELECT %s FROM (%s)", native_list,
-	                       DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, "main"));
+	                       DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, "main", candidate_files));
 	return StringUtil::Format("  SELECT %s\n"
 	                          "  FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
 	                          select_list, SQLString(native_query));
 }
 
-//! Runs the commit's per-table stats query inside SQLite, where its table_id filter reaches the index
-string SQLiteMetadataManager::ColumnsWithValuesQuery(const std::function<string(const string &prefix)> &build) {
-	auto native_query = "SELECT CAST(column_id AS TEXT) AS column_id FROM (" + build("main") + ")";
-	return StringUtil::Format("SELECT column_id::BIGINT AS column_id FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
-	                          SQLString(native_query));
+//! Runs the query inside SQLite, where its table_id filter reaches the index
+string SQLiteMetadataManager::MetadataIdQuery(const std::function<string(const string &prefix)> &build,
+                                              const string &id_column) {
+	auto native_query = StringUtil::Format("SELECT CAST(%s AS TEXT) AS %s FROM (%s)", id_column, id_column, build("main"));
+	return StringUtil::Format("SELECT %s::BIGINT AS %s FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          id_column, id_column, SQLString(native_query));
 }
 
 //! Covering, so the per-column stats lookups behind file pruning read only the index. IF NOT EXISTS takes no
@@ -136,7 +139,12 @@ string SQLiteMetadataManager::ColumnsWithValuesQuery(const std::function<string(
 static string LookupIndexStatement() {
 	return "SELECT * FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'CREATE INDEX IF NOT EXISTS "
 	       "ducklake_file_column_stats_lookup ON ducklake_file_column_stats(table_id, column_id, data_file_id, "
-	       "value_count, null_count, contains_nan, min_value, max_value)');";
+	       "value_count, null_count, contains_nan, min_value, max_value)');"
+	       "SELECT * FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'CREATE INDEX IF NOT EXISTS "
+	       "ducklake_file_partition_value_lookup ON ducklake_file_partition_value(table_id, partition_key_index, "
+	       "partition_value, data_file_id)');"
+	       "SELECT * FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'CREATE INDEX IF NOT EXISTS "
+	       "ducklake_data_file_partition ON ducklake_data_file(table_id, partition_id, data_file_id)');";
 }
 
 string SQLiteMetadataManager::GetCreateTableStatements() {

@@ -40,8 +40,9 @@ public:
 	string GetCreateTableStatements() override;
 	void CreateLookupIndexes() override;
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
-	                                      const string &metadata_table_prefix) override;
-	string ColumnsWithValuesQuery(const std::function<string(const string &prefix)> &build) override;
+	                                      const string &metadata_table_prefix,
+	                                      const std::function<string(const string &)> &candidate_files) override;
+	string MetadataIdQuery(const std::function<string(const string &prefix)> &build, const string &id_column) override;
 };
 
 } // namespace duckdb
